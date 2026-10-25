@@ -4,19 +4,19 @@
 
 ## 当前状态
 
-本仓库是公开安装与发行入口，不包含私有控制层源码。目前尚未发布可下载的 GitHub Release；请勿把安装入口已上传理解为生产版已完成验收。
+本仓库是公开安装与发行入口，不包含私有控制层源码。首个预发行版为 [0.20.1-test.3](https://github.com/pkhosn/cknode/releases/tag/v0.20.1-test.3)，以 VLESS 自用试运行为重点；对应核心源码随 Release 提供。尚无正式稳定版。
 
 安装入口支持 Debian 12/13、Ubuntu 24.04 的 amd64/arm64 管理式安装包；实际系统校验由包内安装器执行。需要 Bash、Python 3.11+、CA 证书及下载脚本所用的 curl。不会安装虚拟机、容器或 Go 编译环境。
 
-## 发行后的安装方式
+## 安装测试版
 
-以下命令须在对应版本已发布后使用；当前没有 Release 时会明确报错，不会改动节点服务。
+当前只发布 Linux amd64 测试包。Ubuntu 24.04 amd64 已完成管理式升级、回退和 VLESS 业务验收；空白主机首次安装、Debian 12/13 和 arm64 尚未完成本版实机验收。
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/pkhosn/cknode/main/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/pkhosn/cknode/main/install.sh) --version 0.20.1-test.3
 ```
 
-测试版必须明确指定已发布版本：在上述命令后添加 `--version 版本号`。仅下载并校验可再加 `--check`。
+测试版必须明确指定版本。仅下载并校验可在上述命令后再加 `--check`。新安装完成后按向导配置面板与节点，维护时输入 `cknode`。
 
 默认入口只查找最新正式 Release，绝不自动选择预发行版。当前包格式仅支持 `X.Y.Z-test.N` / `X.Y.Z-pre.N`，正式稳定版本格式接入前不会发布 stable。
 
