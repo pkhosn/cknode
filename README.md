@@ -1,27 +1,31 @@
 # cknode
 
-V2Board 节点后端。发行与安装入口在本仓库；控制层源码保存在私有仓库。目前测试版：[0.20.1-test.8](https://github.com/pkhosn/cknode/releases/tag/v0.20.1-test.8)。
+基于 **pkhosn/v2bx** 完整框架的 V2Board 节点后端，固定上游提交 `5dec4d0`。沿用原有面板、协议、核心选择、同步、限速、计费与证书逻辑；采用 cknode 品牌和中文安装维护入口。0.20及更早实验版记录保留，新版不自动导入旧配置。
 
-## 安装或升级（Linux amd64）
+## 安装 / 升级（Linux amd64）
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/pkhosn/cknode/main/install.sh) --version 0.20.1-test.8
+bash <(curl -fsSL https://raw.githubusercontent.com/pkhosn/cknode/main/install.sh) --version 0.21.0-test.1
 ```
 
-新装按引导输入面板地址、通信密钥和节点ID；后端读取面板配置。REALITY无需本机证书。已有程序但配置失败时，升级后运行 `cknode setup`。
-
-本版修复 REALITY 被共享 TLS 编辑器默认字段误拒绝的问题，兼容字符串 allow_insecure 默认值、目的地址和端口留空、合法空 short ID；服务器参数错误报告具体字段原因。已用 wl 真实 V2Board 的完整默认配置和面板正常生成的密钥，先复现 test.7 错误，再完成候选包及上述公开一键命令的独立首次安装验收：REALITY 无需证书、服务启动与自启、官方 Xray 客户端完整传输校验、面板流量回执及待报流量清零。详细证据见 Release 的 LIVE-VALIDATION.json。
-
-## 维护
+按引导选择核心、协议，填写面板地址、通信密钥和节点ID。选择 REALITY 后跳过证书；普通TLS支持HTTP/DNS自动证书及已有文件。检测到旧cknode-test服务时会询问是否停用，避免端口冲突；原文件保留。
 
 ```text
-cknode           中文维护菜单
-cknode setup     配置引导
-cknode status    运行状态
-cknode log       日志
-cknode nodes     节点同步状态
-cknode cert      普通TLS证书管理
-cknode rollback  回退上一版本
+cknode              中文维护菜单
+cknode setup        配置向导
+cknode node list     节点列表
+cknode node add      添加节点
+cknode status       运行状态
+cknode log          实时日志
+cknode restart      重启
+cknode update 版本号  指定版本升级
+cknode uninstall    卸载，可保留配置
 ```
 
-当前为Linux amd64预发行版本。核心对应源码、固定离线依赖及许可文件随Release提供；复用库保留原作者和许可证。
+## 本轮验证
+
+在 wl Ubuntu24.04 上，原版与cknode使用相同配置完成VLESS TCP+TLS、WS+TLS、REALITY+Vision的本机客户端跨公网传输和完整内容校验。面板限速、计费与在线上报、用户新增与禁用、配置引导、启停/重启/自启、版本切换、卸载保留配置及重装恢复均有实测记录。公开首次安装结果见 [发行附件](https://github.com/pkhosn/cknode/releases/tag/v0.21.0-test.1) 的 LIVE-VALIDATION.json。
+
+普通TLS验证复用了既有有效证书，首次ACME及DNS签发尚未实测。其他协议和sing-box运行、生产容量及长期稳定性尚未完成本轮验收；保留上游代码不等于全部组合已验证。
+
+对应守护程序源码、固定vendor依赖和许可证随发行附件提供，可离线构建。上游作者与第三方许可保留；源码开发位于私有仓库cknode/v2bx-foundation分支。
