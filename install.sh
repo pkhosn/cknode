@@ -1,160 +1,128 @@
-#!/bin/bash
-# cknode GitHub download entry. Does not compile or provision extra environments.
+#!/usr/bin/env bash
 set -euo pipefail
-if ! command -v python3 >/dev/null 2>&1; then
-  echo '缺少 Python 3。Debian/Ubuntu 请先运行：apt-get install -y python3 ca-certificates' >&2
-  exit 1
+umask 077
+version=0.21.0-test.1
+package=''
+while (( $# )); do
+    case "$1" in
+        --version) version=${2:?缺少版本号}; shift 2;;
+        --package) package=${2:?缺少本地安装包路径}; shift 2;;
+        *) echo "未知参数：$1" >&2; exit 2;;
+    esac
+done
+[[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]] || { echo '版本格式无效';exit 2; }
+[[ $EUID -eq 0 ]] || { echo '请使用 root 安装。'; exit 1; }
+case $(uname -m) in x86_64|amd64) arch=amd64;;aarch64|arm64) arch=arm64;;*) echo '暂不支持此 CPU 架构';exit 1;;esac
+[[ $(uname -s) == Linux ]] || { echo '仅支持 Linux。';exit 1; }
+missing=()
+for tool in curl python3 tar; do command -v "$tool" >/dev/null || missing+=("$tool"); done
+if (( ${#missing[@]} )); then
+    command -v apt-get >/dev/null || { echo '请安装 curl、python3、tar 后重试。';exit 1; }
+    apt-get update
+    apt-get install -y curl python3 tar ca-certificates
 fi
-# Keep the calling terminal for the nested configuration wizard.
-python3 - "$@" 3<&0 <<'CKNODE_PYTHON'
-#!/usr/bin/env python3
-"""Download a cknode release, verify it, then use its existing installer."""
-import argparse
-import hashlib
-import json
-import os
-from pathlib import Path, PurePosixPath
-import platform
-import re
-import subprocess
-import sys
-import tarfile
-import tempfile
-import urllib.error
-import urllib.request
-
-REPO = 'pkhosn/cknode'
-VERSION = re.compile(r'^[0-9]+\.[0-9]+\.[0-9]+-(?:test|pre)\.[0-9]+$')
-
-
-def download(url, target, limit):
-    request = urllib.request.Request(url, headers={'User-Agent': 'cknode-installer'})
-    with urllib.request.urlopen(request, timeout=60) as response:
-        if not response.geturl().startswith('https://'):
-            raise ValueError('拒绝非 HTTPS 下载地址')
-        size = 0
-        with target.open('xb') as out:
-            while True:
-                chunk = response.read(65536)
-                if not chunk:
-                    break
-                size += len(chunk)
-                if size > limit:
-                    raise ValueError('下载超过大小上限')
-                out.write(chunk)
-
-
-def unpack(archive, destination, expected):
-    # Inspect all entries before extracting anything, including duplicate paths.
-    with tarfile.open(archive, 'r:gz') as tar:
-        members = tar.getmembers()
-        if not members or len(members) > 10000:
-            raise ValueError('发行包文件数量异常')
-        seen = set()
-        total = 0
-        for member in members:
-            name = member.name.rstrip('/')
-            path = PurePosixPath(name)
-            if (not name or path.is_absolute() or
-                    any(part in ('', '.', '..') for part in name.split('/')) or
-                    path.parts[0] != expected or name in seen or
-                    not (member.isfile() or member.isdir()) or
-                    member.size < 0 or member.size > 256 << 20):
-                raise ValueError('发行包含不安全路径或特殊文件')
-            seen.add(name)
-            total += member.size
-            if total > 512 << 20:
-                raise ValueError('发行包解压大小超限')
-        for member in members:
-            target = destination / member.name
-            if member.isdir():
-                target.mkdir(parents=True, exist_ok=True)
-            else:
-                target.parent.mkdir(parents=True, exist_ok=True)
-                with tar.extractfile(member) as src, target.open('xb') as dst:
-                    while True:
-                        chunk = src.read(65536)
-                        if not chunk:
-                            break
-                        dst.write(chunk)
-                target.chmod(0o755 if member.mode & 0o111 else 0o644)
-    return destination / expected
-
-
-def install(version, arch, folder, check=False):
-    tag = 'v' + version
-    name = f'cknode-{version}-linux-{arch}'
-    filename = name + '.tar.gz'
-    base = f'https://github.com/{REPO}/releases/download/{tag}/'
-    archive = folder / filename
-    checksum = folder / (filename + '.sha256')
-    download(base + filename + '.sha256', checksum, 4096)
-    match = re.fullmatch(r'([0-9a-f]{64})  ' + re.escape(filename) + r'\n?',
-                         checksum.read_text('ascii'))
-    if not match:
-        raise ValueError('发行包校验文件无效')
-    download(base + filename, archive, 256 << 20)
-    digest = hashlib.sha256()
-    with archive.open('rb') as src:
-        for chunk in iter(lambda: src.read(65536), b''):
-            digest.update(chunk)
-    if digest.hexdigest() != match.group(1):
-        raise ValueError('发行包 SHA-256 不匹配，未执行安装')
-    package = unpack(archive, folder, name)
-    # The verifier is part of the checksum-verified release, not a system module.
-    subprocess.run(['python3', str(package / 'cknode-release.py'),
-                    'verify', str(package)], check=True)
-    if (package / 'VERSION').read_text().strip() != version or \
-            (package / 'ARCH').read_text().strip() != arch:
-        raise ValueError('发行包版本或架构不匹配')
-    if check:
-        print('下载、解压和完整包校验通过；未安装或修改服务。')
-        return
-    subprocess.run(['bash', str(package / 'install-test.sh')], stdin=3, check=True)
-
-
-def main():
-    parser = argparse.ArgumentParser(description='cknode GitHub 安装入口')
-    parser.add_argument('--version', help='指定已验收版本，如 0.20.1-test.1；可加 v 前缀')
-    parser.add_argument('--check', action='store_true', help='仅下载校验，不安装')
-    args = parser.parse_args()
-    if sys.version_info < (3, 11):
-        parser.error('需要 Python 3.11 或更新版本')
-    if platform.system() != 'Linux':
-        parser.error('仅支持 Linux')
-    arch = {'x86_64': 'amd64', 'aarch64': 'arm64'}.get(platform.machine())
-    if arch is None:
-        parser.error('仅支持 amd64/arm64')
-    if not args.check and os.geteuid() != 0:
-        parser.error('请使用 root 执行安装')
-    with tempfile.TemporaryDirectory(prefix='cknode-download-') as temp:
-        folder = Path(temp)
-        version = args.version
-        if version is None:
-            metadata = folder / 'latest.json'
-            try:
-                download(f'https://api.github.com/repos/{REPO}/releases/latest',
-                         metadata, 1 << 20)
-            except urllib.error.HTTPError as error:
-                if error.code == 404:
-                    raise ValueError('尚无正式发行版；测试版须使用 --version 明确指定') from None
-                raise
-            release = json.loads(metadata.read_text())
-            if release.get('draft') or release.get('prerelease'):
-                raise ValueError('默认安装不选择草稿或预发行版')
-            version = release['tag_name']
-        version = version.removeprefix('v')
-        if not VERSION.fullmatch(version):
-            raise ValueError('当前安装格式只接受明确的 test/pre 版本号')
-        print(f'cknode {version} / linux-{arch}')
-        install(version, arch, folder, args.check)
-
-
-if __name__ == '__main__':
-    try:
-        main()
-    except (OSError, ValueError, KeyError, tarfile.TarError,
-            subprocess.CalledProcessError) as error:
-        raise SystemExit('cknode 安装未完成：' + str(error))
-
-CKNODE_PYTHON
+command -v systemctl >/dev/null || { echo '此版本需要 systemd。';exit 1; }
+tmp=$(mktemp -d)
+stage=''
+cleanup() { rm -rf "$tmp"; [[ -z $stage ]] || rm -rf "$stage"; }
+trap cleanup EXIT
+name="cknode-$version-linux-$arch.tar.gz"
+if [[ -n $package ]]; then
+    cp -- "$package" "$tmp/$name"
+    cp -- "$package.sha256" "$tmp/$name.sha256"
+else
+    url="https://github.com/pkhosn/cknode/releases/download/v$version"
+    echo "正在下载 cknode $version / linux-$arch…"
+    curl -fLsS --retry 2 --connect-timeout 15 "$url/$name" -o "$tmp/$name"
+    curl -fLsS --retry 2 --connect-timeout 15 "$url/$name.sha256" -o "$tmp/$name.sha256"
+fi
+(cd "$tmp"; sha256sum -c "$name.sha256")
+python3 - "$tmp/$name" "$tmp/extracted" "$version" "$arch" <<'PY'
+import hashlib,json,pathlib,sys,tarfile
+archive,out,version,arch=sys.argv[1:];out=pathlib.Path(out);out.mkdir()
+with tarfile.open(archive) as t:
+    for m in t.getmembers():
+        p=pathlib.PurePosixPath(m.name)
+        if p.is_absolute() or '..' in p.parts or m.issym() or m.islnk() or not(m.isfile() or m.isdir()):raise SystemExit('无效安装包成员')
+    t.extractall(out)
+meta=json.loads((out/'RELEASE.json').read_text())
+if meta['version']!=version or meta['arch']!=arch or meta['base_commit']!='5dec4d0e8a8ae1b4d9fde939c02f96781b874bee':raise SystemExit('安装包版本、架构或源码基线不匹配')
+for line in (out/'SHA256SUMS').read_text().splitlines():
+    expected,name=line.split('  ',1);p=out/name
+    if pathlib.PurePosixPath(name).is_absolute() or '..' in pathlib.PurePosixPath(name).parts or not p.is_file() or hashlib.sha256(p.read_bytes()).hexdigest()!=expected:raise SystemExit('安装包文件校验失败')
+for name in ['cknode','cknode.sh','setup.py','cknode.service']: 
+    if not (out/name).is_file():raise SystemExit('安装包缺少 '+name)
+PY
+# Finish downloads and verification before touching the running installation.
+stage=$(mktemp -d /usr/local/cknode-stage.XXXXXX)
+cp -a "$tmp/extracted/." "$stage/"
+chmod 755 "$stage" "$stage/cknode" "$stage/cknode.sh" "$stage/setup.py"
+old_command=false
+old_link=false
+old_unit=false
+[[ ! -e /usr/local/bin/cknode ]] || { cp -a /usr/local/bin/cknode "$tmp/original-command";old_command=true; }
+[[ ! -e /usr/bin/cknode && ! -L /usr/bin/cknode ]] || { cp -a /usr/bin/cknode "$tmp/original-link";old_link=true; }
+[[ ! -f /etc/systemd/system/cknode.service ]] || { cp -a /etc/systemd/system/cknode.service "$tmp/original-unit";old_unit=true; }
+active=false
+if systemctl is-active --quiet cknode.service; then active=true;systemctl stop cknode.service;fi
+previous=''
+if [[ -d /usr/local/cknode ]]; then
+    previous="/usr/local/cknode-backup-$(date +%Y%m%d%H%M%S)-$$"
+    mv /usr/local/cknode "$previous"
+fi
+rollback() {
+    systemctl stop cknode.service 2>/dev/null || true
+    rm -rf /usr/local/cknode
+    if [[ -n $previous ]]; then
+        mv "$previous" /usr/local/cknode
+        install -m 644 /usr/local/cknode/cknode.service /etc/systemd/system/cknode.service
+        install -m 755 /usr/local/cknode/cknode.sh /usr/local/bin/cknode
+    fi
+    rm -f /usr/local/bin/cknode /usr/bin/cknode /etc/systemd/system/cknode.service
+    if $old_command; then cp -a "$tmp/original-command" /usr/local/bin/cknode;fi
+    if $old_link; then cp -a "$tmp/original-link" /usr/bin/cknode;fi
+    if $old_unit; then cp -a "$tmp/original-unit" /etc/systemd/system/cknode.service;fi
+    systemctl daemon-reload
+    if $active; then systemctl start cknode.service || true;fi
+    echo '升级未成功，已尝试恢复上一版本。' >&2
+}
+trap 'rollback; exit 1' ERR
+mv "$stage" /usr/local/cknode
+stage=''
+# Keep an earlier experimental maintenance command as a backup; never import
+# its configuration or change its daemon/service.
+if [[ -f /usr/local/bin/cknode ]] && ! cmp -s /usr/local/bin/cknode /usr/local/cknode/cknode.sh; then
+    cp -a /usr/local/bin/cknode "/usr/local/bin/cknode.backup-$(date +%Y%m%d%H%M%S)-$$"
+fi
+install -m 755 /usr/local/cknode/cknode.sh /usr/local/bin/cknode
+ln -sfn /usr/local/bin/cknode /usr/bin/cknode
+install -d -m 700 /etc/cknode
+for asset in geoip.dat geosite.dat geoip.db geosite.db; do
+    if [[ ! -e /etc/cknode/$asset && -f /usr/local/cknode/examples/$asset ]]; then
+        install -m 644 "/usr/local/cknode/examples/$asset" "/etc/cknode/$asset"
+    fi
+done
+install -m 644 /usr/local/cknode/cknode.service /etc/systemd/system/cknode.service
+systemctl daemon-reload
+if $active; then
+    systemctl start cknode.service
+    sleep 3
+    systemctl is-active --quiet cknode.service
+fi
+trap - ERR
+printf '\n========================================\n  cknode 安装完成：%s\n========================================\n\n  cknode        中文维护菜单\n  cknode setup  配置向导\n  cknode log    查看日志\n\n' "$version"
+if [[ -t 0 ]]; then
+    if systemctl is-active --quiet cknode-test.service; then
+        read -r -p '检测到旧实验版 cknode-test，是否停用旧服务以避免端口冲突？[Y/n]: ' legacy_answer
+        if [[ ${legacy_answer:-y} == [yY] ]]; then
+            systemctl disable --now cknode-test.service
+            echo '旧实验服务已停用，原程序和配置保留。'
+        else
+            echo '旧实验服务继续运行；请为新节点使用未占用端口。'
+        fi
+    fi
+    read -r -p '现在进入配置向导？[Y/n]: ' answer
+    if [[ ${answer:-y} == [yY] ]]; then /usr/local/bin/cknode setup;fi
+else
+    echo '运行 cknode setup 开始配置。'
+fi
