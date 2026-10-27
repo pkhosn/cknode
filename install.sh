@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 umask 077
-version=0.21.0-test.1
+version=''
 package=''
 while (( $# )); do
     case "$1" in
@@ -10,7 +10,9 @@ while (( $# )); do
         *) echo "未知参数：$1" >&2; exit 2;;
     esac
 done
-[[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]] || { echo '版本格式无效';exit 2; }
+if [[ $version == latest ]]; then version=''; fi
+if [[ -n $version && ! $version =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]]; then echo '版本格式无效';exit 2;fi
+if [[ -n $package && -z $version ]]; then echo '使用本地安装包时请同时指定 --version。' >&2;exit 2;fi
 [[ $EUID -eq 0 ]] || { echo '请使用 root 安装。'; exit 1; }
 case $(uname -m) in x86_64|amd64) arch=amd64;;aarch64|arm64) arch=arm64;;*) echo '暂不支持此 CPU 架构';exit 1;;esac
 [[ $(uname -s) == Linux ]] || { echo '仅支持 Linux。';exit 1; }
@@ -26,13 +28,51 @@ tmp=$(mktemp -d)
 stage=''
 cleanup() { rm -rf "$tmp"; [[ -z $stage ]] || rm -rf "$stage"; }
 trap cleanup EXIT
+if [[ -z $version ]]; then
+    echo '正在获取 cknode 最新已发布版本…'
+    if ! curl -fLsS --retry 2 --connect-timeout 15 --max-time 60 \
+        -H 'Accept: application/vnd.github+json' \
+        'https://api.github.com/repos/pkhosn/cknode/releases?per_page=100' -o "$tmp/releases.json"; then
+        echo '无法获取最新版本，请稍后重试；现有安装未修改。' >&2
+        exit 1
+    fi
+    version=$(python3 - "$tmp/releases.json" "$arch" <<'LATEST_VERSION'
+import json,re,sys
+try:
+    releases=json.load(open(sys.argv[1]))
+except (OSError,ValueError):
+    raise SystemExit('GitHub 版本列表无效；现有安装未修改。')
+if not isinstance(releases,list):
+    raise SystemExit('无法读取 GitHub 版本列表；现有安装未修改。')
+versions=[]
+for release in releases:
+    if not isinstance(release,dict) or release.get('draft') or not release.get('published_at'):
+        continue
+    match=re.fullmatch(r'v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?',release.get('tag_name',''))
+    if not match:
+        continue
+    pre=match.group(4)
+    key=tuple(map(int,match.group(1,2,3)))+(pre is None,tuple((0,int(v)) if v.isdigit() else (1,v) for v in (pre or '').split('.')))
+    versions.append((key,match.group(0).removeprefix('v'),release))
+if not versions:
+    raise SystemExit('没有可安装的已发布版本；现有安装未修改。')
+_,version,release=max(versions,key=lambda value:value[0])
+assets={a.get('name') for a in release.get('assets',[]) if isinstance(a,dict) and a.get('state')=='uploaded'}
+archive=f'cknode-{version}-linux-{sys.argv[2]}.tar.gz'
+if not {archive,archive+'.sha256'} <= assets:
+    raise SystemExit(f'最新版本 {version} 尚无完整的 linux-{sys.argv[2]} 安装包；现有安装未修改。')
+print(version)
+LATEST_VERSION
+    )
+    echo "最新版本：$version"
+fi
 name="cknode-$version-linux-$arch.tar.gz"
 if [[ -n $package ]]; then
     cp -- "$package" "$tmp/$name"
     cp -- "$package.sha256" "$tmp/$name.sha256"
 else
     url="https://github.com/pkhosn/cknode/releases/download/v$version"
-    echo "正在下载 cknode $version / linux-$arch…"
+    echo "正在下载 cknode $version / linux-${arch}…"
     curl -fLsS --retry 2 --connect-timeout 15 "$url/$name" -o "$tmp/$name"
     curl -fLsS --retry 2 --connect-timeout 15 "$url/$name.sha256" -o "$tmp/$name.sha256"
 fi

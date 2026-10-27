@@ -5,8 +5,10 @@
 ## 安装 / 升级（Linux amd64）
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/pkhosn/cknode/main/install.sh) --version 0.21.0-test.1
+bash <(curl -fsSL https://raw.githubusercontent.com/pkhosn/cknode/main/install.sh)
 ```
+
+不带版本号时自动安装最新已发布版本（包含测试版、排除草稿）。需要固定版本时仍可追加 `--version 0.21.0-test.1`。`cknode update` 默认升级到最新版本。
 
 按引导选择核心、协议，填写面板地址、通信密钥和节点ID。选择 REALITY 后跳过证书；普通TLS支持HTTP/DNS自动证书及已有文件。检测到旧cknode-test服务时会询问是否停用，避免端口冲突；原文件保留。
 
@@ -18,7 +20,7 @@ cknode node add      添加节点
 cknode status       运行状态
 cknode log          实时日志
 cknode restart      重启
-cknode update 版本号  指定版本升级
+cknode update       升级到最新版本
 cknode uninstall    卸载，可保留配置
 ```
 
